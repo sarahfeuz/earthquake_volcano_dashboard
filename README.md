@@ -51,7 +51,7 @@ Dashboard Visualization
 - Docker and Docker Compose
 - Python 3.8+
 
-### 2. Add .jar files
+### 1. Add .jar files
 Please add the following .jar files in /pipeline/spark_jar (you will find them online)
 - hadoop-aws-3.3.4.jar
 - aws-java-sdk-bundle-1.12.262.jar

@@ -1,0 +1,370 @@
+services:
+  # Database Layer - MinIO Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio-db
+    ports:
+      - "9000:9000"  # API port
+      - "9001:9001"  # Console port
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - pipeline-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Kafka and Zookeeper for streaming
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - pipeline-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - pipeline-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Database Initialization - Sets up MinIO buckets
+  db-init:
+    build:
+      context: ./database
+      dockerfile: Dockerfile.db
+    container_name: db-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+    restart: "no"
+
+  # Data Pipeline Layer - Spark and Processing
+  pipeline:
+    build:
+      context: ./pipeline
+      dockerfile: Dockerfile
+    container_name: pipeline-app
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./pipeline/spark_app:/opt/spark_app
+      - ./pipeline/config:/opt/config
+      - ./pipeline/spark_jars:/opt/spark_jars
+    working_dir: /opt
+    command: python3 main.py
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+
+  # Visualization Layer - Dash Dashboard
+  visualization:
+    build:
+      context: ./visualization
+      dockerfile: Dockerfile
+    container_name: visualization-dashboard
+    depends_on:
+      - minio
+    ports:
+      - "8050:8050"  # Dash server port
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+    restart: unless-stopped
+
+  # Spark Cluster (Optional - for distributed processing)
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
+    ports:
+      - "8080:8080"  # Spark UI
+      - "7077:7077"  # Spark master port
+    environment:
+      - SPARK_MODE=master
+    networks:
+      - pipeline-network
+
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+    networks:
+      - pipeline-network
+
+  # Streaming Service - Real-time Data Ingestion with Kafka
+  streaming-service:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-service
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_service.py
+    restart: unless-stopped
+
+  # Streaming Processor - Bronze Layer (Raw Data Processing)
+  streaming-processor-bronze:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-processor-bronze
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_processor.py bronze
+    restart: unless-stopped
+
+  # Streaming Processor - Volcano Bronze Layer (Raw Volcano Data Processing)
+  streaming-processor-volcano-bronze:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-processor-volcano-bronze
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_processor.py volcano-bronze
+    restart: unless-stopped
+
+  # Streaming Processor - Silver Layer (Data Cleaning and Processing)
+  streaming-processor-silver:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-processor-silver
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_processor.py silver
+    restart: unless-stopped
+
+  # Streaming Processor - Volcano Silver Layer (Volcano Data Cleaning and Processing)
+  streaming-processor-volcano-silver:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-processor-volcano-silver
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_processor.py volcano-silver
+    restart: unless-stopped
+
+  # Streaming Processor - Gold Layer (Analytics and Aggregations)
+  streaming-processor-gold:
+    build:
+      context: ./streaming
+      dockerfile: Dockerfile
+    container_name: streaming-processor-gold
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - pipeline-network
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio
+      - MINIO_SECRET_KEY=minio123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    command: python3 streaming_processor.py gold
+    restart: unless-stopped
+
+  # PostgreSQL Database for Airflow
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - pipeline-network
+
+  # Apache Airflow - Workflow Orchestration
+  airflow-init:
+    image: apache/airflow:2.8.1
+    container_name: airflow-init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    command: db init
+    networks:
+      - pipeline-network
+
+  airflow-webserver:
+    image: apache/airflow:2.8.1
+    container_name: airflow-webserver
+    depends_on:
+      - airflow-init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    ports:
+      - "8081:8080"
+    command: webserver
+    restart: always
+    networks:
+      - pipeline-network
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.1
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    command: scheduler
+    restart: always
+    networks:
+      - pipeline-network
+
+volumes:
+  minio_data:
+    driver: local
+  postgres-db-volume:
+
+networks:
+  pipeline-network:
+    driver: bridge

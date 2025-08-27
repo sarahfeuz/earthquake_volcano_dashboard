@@ -1,0 +1,40 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.env/
+.venv/
+venv/
+env/
+
+# macOS metadata
+.DS_Store
+
+# Editor/IDE
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+airflow/logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary or local auth/session artifacts
+cookies.txt
+
+# Docker/Process
+*.pid
+
+# Node (if any future additions)
+node_modules/
+
+# Keep Spark JARs committed
+# (do not ignore pipeline/spark_jars)

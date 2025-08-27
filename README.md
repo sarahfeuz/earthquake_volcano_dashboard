@@ -51,7 +51,12 @@ Dashboard Visualization
 - Docker and Docker Compose
 - Python 3.8+
 
-### 1. Start the Pipeline
+### 2. Add .jar files
+Please add the following .jar files in /pipeline/spark_jar (you will find them online)
+- hadoop-aws-3.3.4.jar
+- aws-java-sdk-bundle-1.12.262.jar
+
+### 2. Start the Pipeline
 ```bash
 # Start all services
 docker-compose up -d
@@ -60,7 +65,7 @@ docker-compose up -d
 docker-compose ps
 ```
 
-### 2. Monitor the Pipeline
+### 3. Monitor the Pipeline
 ```bash
 # View logs
 docker-compose logs -f streaming-service
@@ -69,7 +74,7 @@ docker-compose logs -f streaming-processor-silver
 docker-compose logs -f streaming-processor-gold
 ```
 
-### 3. Access Services
+### 4. Access Services
 - **MinIO Console**: http://localhost:9001 (minio/minio123)
 - **Dashboard**: http://localhost:8050
 - **Kafka**: localhost:9092

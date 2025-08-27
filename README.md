@@ -1,4 +1,4 @@
-# Data Pipeline with Delta Lake and Kafka Medallion Architecture
+# Earthquake Dashboard 
 
 A comprehensive data pipeline that implements the medallion architecture using Delta Lake on MinIO with Kafka for real-time streaming data processing.
 

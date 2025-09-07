@@ -1,16 +1,18 @@
-# Earthquake visualization pipeline with streaming and historical data
+# Earthquake Visualization Pipeline with Streaming and Historical Data
 
-An earthquake‑focused visualization pipeline that combines real‑time streaming with historical data. It implements the medallion architecture on Delta Lake (stored on MinIO) and uses Kafka for streaming USGS earthquake events into Spark, which powers an interactive dashboard. Historical datasets are curated in Bronze/Silver/Gold Delta tables to enable trend analysis alongside live updates.
+A comprehensive earthquake and volcano monitoring pipeline that combines real-time streaming with historical data analysis. The system implements the medallion architecture on Delta Lake (stored on MinIO) and uses Kafka for streaming USGS earthquake events and NASA EONET volcano data into Spark, which powers an interactive dashboard. Historical datasets are curated in Bronze/Silver/Gold Delta tables to enable trend analysis alongside live updates.
 
-##  Architecture Overview
+## Architecture Overview
 
 This pipeline implements a modern data architecture with:
 
 - **Delta Lake**: ACID transactions, schema enforcement, and time travel on top of MinIO
 - **Kafka**: Real-time streaming with topic-based messaging
 - **Medallion Architecture**: Bronze → Silver → Gold data layers
-- **Spark**: Distributed data processing
+- **Spark**: Distributed data processing with standalone cluster
 - **MinIO**: S3-compatible object storage
+- **Apache Airflow**: Workflow orchestration and monitoring
+- **PostgreSQL**: Airflow metadata database
 - **Real-time Streaming**: Earthquake and volcano event processing with live analytics
 
 ##  Data Flow
@@ -45,27 +47,52 @@ Dashboard Visualization
 - **Format**: Aggregated analytics and business metrics
 - **Partitioning**: By country_code, indicator_category
 
-##  Quick Start
+## Quick Start
 
 ### Prerequisites
 - Docker and Docker Compose
 - Python 3.8+
+- At least 4GB RAM available for containers
+- Ports 8080, 8081, 8050, 9000, 9001, 9092 available
 
-### 1. Start the Pipeline
+### Option 1: Using Helper Scripts (Recommended)
+
 ```bash
-# Start all services
+# 1. Start the complete pipeline
+./run_pipeline.sh start
+
+# 2. Initialize Airflow (first time only)
+./run_pipeline.sh init-airflow
+
+# 3. Check pipeline status
+./run_pipeline.sh status
+```
+
+### Option 2: Manual Docker Compose
+
+```bash
+# 1. Start all services
 docker-compose up -d
 
-# Check service status
+# 2. Initialize Airflow database (first time only)
+docker-compose up airflow-init
+
+# 3. Check service status
 docker-compose ps
 ```
 
 ### 2. Monitor the Pipeline
+
 ```bash
-# View logs
+# Using helper script
+./run_pipeline.sh status
+
+# Or manually view logs
 docker-compose logs -f streaming-service
 docker-compose logs -f streaming-processor-bronze
+docker-compose logs -f streaming-processor-volcano-bronze
 docker-compose logs -f streaming-processor-silver
+docker-compose logs -f streaming-processor-volcano-silver
 docker-compose logs -f streaming-processor-gold
 ```
 
@@ -74,21 +101,90 @@ docker-compose logs -f streaming-processor-gold
 - **Dashboard**: http://localhost:8050
 - **Kafka**: localhost:9092
 - **Spark UI**: http://localhost:8080
+- **Airflow UI**: http://localhost:8081 (airflow/airflow)
 
-##  Services
+## Helper Scripts
 
-### Core Services
-- **MinIO**: S3-compatible object storage
-- **Kafka**: Message streaming platform
+The project includes several helper scripts to simplify pipeline management:
+
+### Pipeline Management (`run_pipeline.sh`)
+Comprehensive script for managing the entire pipeline:
+
+```bash
+# Start the complete pipeline
+./run_pipeline.sh start
+
+# Stop the pipeline
+./run_pipeline.sh stop
+
+# Restart the pipeline
+./run_pipeline.sh restart
+
+# Check pipeline status and logs
+./run_pipeline.sh status
+
+# View logs for specific components
+./run_pipeline.sh logs <component>
+
+# Start specific components
+./run_pipeline.sh component <component>
+
+# Initialize Airflow (first time setup)
+./run_pipeline.sh init-airflow
+
+# Clean up (remove all containers, volumes, networks)
+./run_pipeline.sh cleanup
+
+# Show help
+./run_pipeline.sh help
+```
+
+**Available Components**: `minio`, `kafka`, `zookeeper`, `streaming-service`, `visualization`, `airflow-webserver`, `airflow-scheduler`
+
+### Database Setup (`run_database_setup.sh`)
+Simplified script for initial database setup:
+
+```bash
+# Set up MinIO and initialize buckets
+./run_database_setup.sh
+```
+
+### Pipeline Status Check (`check_pipeline_status.sh`)
+Quick status check for all pipeline components:
+
+```bash
+# Check overall pipeline health
+./check_pipeline_status.sh
+```
+
+## Services
+
+### Core Infrastructure
+- **MinIO**: S3-compatible object storage for Delta Lake tables
+- **Kafka**: Message streaming platform for real-time data
 - **Zookeeper**: Kafka coordination service
+- **PostgreSQL**: Airflow metadata database
 
 ### Data Processing
-- **Pipeline**: Batch processing with Delta Lake
-- **Streaming Service**: Real-time data ingestion
-- **Streaming Processors**: Medallion architecture layers
+- **Pipeline**: Batch processing with Delta Lake (World Bank data)
+- **Streaming Service**: Real-time data ingestion from USGS and NASA APIs
+- **Streaming Processors**: 
+  - Bronze processors (earthquake and volcano data)
+  - Silver processors (data cleaning and enrichment)
+  - Gold processors (analytics and aggregations)
+
+### Orchestration & Monitoring
+- **Apache Airflow**: Workflow orchestration and monitoring
+  - Airflow Webserver: Web UI for DAG management
+  - Airflow Scheduler: Task scheduling and execution
+  - Airflow Init: Database initialization
 
 ### Visualization
-- **Dashboard**: Real-time earthquake monitoring
+- **Dashboard**: Real-time earthquake and volcano monitoring with interactive maps
+
+### Spark Cluster
+- **Spark Master**: Cluster coordination and job scheduling
+- **Spark Worker**: Distributed data processing
 
 ##  Streaming Pipeline
 
@@ -131,7 +227,54 @@ docker-compose logs -f streaming-processor-gold
 - Partition pruning
 - Statistics collection
 
-##  Monitoring and Maintenance
+## Apache Airflow Orchestration
+
+The pipeline includes comprehensive workflow orchestration using Apache Airflow with three main DAGs:
+
+### Available DAGs
+
+#### 1. Batch Pipeline DAG (`batch_pipeline_dag`)
+- **Schedule**: Daily at 2:00 AM
+- **Purpose**: Orchestrates batch processing of World Bank data through medallion layers
+- **Tasks**:
+  - Health checks for MinIO and Kafka
+  - Bronze layer: Raw data ingestion
+  - Silver layer: Data cleaning and validation
+  - Gold layer: Analytics and aggregations
+  - Delta table optimization
+  - Data quality validation
+  - Completion notifications
+
+#### 2. Data Quality DAG (`data_quality_dag`)
+- **Schedule**: Every 2 hours
+- **Purpose**: Continuous monitoring and validation of data quality across all layers
+- **Tasks**:
+  - Validate data quality in Bronze, Silver, and Gold layers
+  - Check earthquake data quality
+  - Verify data completeness and freshness
+  - Schema validation
+  - Generate quality reports
+  - Trigger data refresh if needed
+
+#### 3. Streaming Monitoring DAG (`streaming_monitoring_dag`)
+- **Schedule**: Every 5 minutes
+- **Purpose**: Real-time monitoring of streaming pipeline health
+- **Tasks**:
+  - Check streaming service health
+  - Verify Kafka topics and connectivity
+  - Monitor streaming processors (Bronze, Silver, Gold)
+  - Dashboard health checks
+  - Data freshness validation
+  - Delta Lake table verification
+  - Generate monitoring reports
+  - Alert on failures
+
+### Airflow Access
+- **Web UI**: http://localhost:8081
+- **Default Credentials**: `airflow` / `airflow`
+- **Database**: PostgreSQL (internal)
+
+## Monitoring and Maintenance
 
 ### Delta Lake Maintenance
 ```bash
@@ -179,14 +322,26 @@ docker-compose exec kafka kafka-consumer-groups --bootstrap-server localhost:909
 - Economic indicators
 - Disaster risk metrics
 
-### USGS Earthquake Data and NASA EONET Volcano Events
-- Open volcano eruption events (active/open status)
-- Location and category metadata
-- Event lifecycle updates (opened/closed)
-- Real-time earthquake feeds
+### USGS Earthquake Data
+- Real-time earthquake feeds from USGS API
 - Magnitude and location data
 - Tsunami warnings
 - Significance scores
+- Historical earthquake data
+- GeoJSON format with comprehensive metadata
+
+### NASA EONET Volcano Events
+- **Source**: NASA Earth Observatory Natural Event Tracker (EONET)
+- **Data Type**: Open volcano eruption events (active/open status)
+- **Update Frequency**: Real-time updates
+- **Data Includes**:
+  - Event location and coordinates
+  - Event category and type
+  - Event lifecycle updates (opened/closed)
+  - Event title and description
+  - Source attribution and links
+  - Event date and time information
+- **Integration**: Streamed through Kafka topics and processed through medallion architecture
 
 ##  Development
 
@@ -213,7 +368,7 @@ docker-compose logs streaming-service
 docker-compose logs pipeline
 ```
 
-##  Additional Resources
+## Additional Resources
 
 - [Delta Lake Documentation](https://docs.delta.io/)
 - [Apache Kafka Documentation](https://kafka.apache.org/documentation/)

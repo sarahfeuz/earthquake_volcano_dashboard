@@ -23,10 +23,10 @@ def run_silver_job(spark, bronze_df=None):
     print("Running Silver job...")
     
     if bronze_df is None:
-        # Read from bronze layer Delta table if not provided
-        print("Reading from bronze layer Delta table...")
-        bronze_delta_path = "s3a://bronze/raw_data/world_bank"
-        bronze_df = read_delta_table(spark, bronze_delta_path)
+        # Read from bronze layer Parquet files if not provided
+        print("Reading from bronze layer Parquet files...")
+        bronze_parquet_path = "s3a://bronze/raw_data/world_bank"
+        bronze_df = spark.read.parquet(bronze_parquet_path)
     else:
         print("Using provided bronze dataframe")
     
@@ -82,19 +82,14 @@ def run_silver_job(spark, bronze_df=None):
     print("Processed data preview:")
     silver_df.show(10, truncate=False)
     
-    # Write to silver layer using Delta Lake
-    print("Writing to silver layer using Delta Lake...")
-    silver_delta_path = "s3a://silver/processed_data/world_bank"
+    # Write to silver layer using Parquet
+    print("Writing to silver layer using Parquet...")
+    silver_parquet_path = "s3a://silver/processed_data/world_bank"
     
-    # Write as Delta table with partitioning by year and country_code
-    write_delta_table(
-        df=silver_df,
-        table_path=silver_delta_path,
-        mode="overwrite",
-        partition_by=["year", "country_code"]
-    )
+    # Write as Parquet with partitioning by year and country_code
+    silver_df.write.mode("overwrite").partitionBy("year", "country_code").parquet(silver_parquet_path)
     
-    print(f" Silver job completed. Delta table written to: {silver_delta_path}")
+    print(f" Silver job completed. Parquet files written to: {silver_parquet_path}")
     
     return silver_df
 

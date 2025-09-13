@@ -44,19 +44,14 @@ def run_bronze_job(spark):
     print("World Bank data preview:")
     spark_df.show(10, truncate=False)
     
-    # Write to bronze layer using Delta Lake
-    print("Writing to bronze layer using Delta Lake...")
-    bronze_delta_path = "s3a://bronze/raw_data/world_bank"
+    # Write to bronze layer using Parquet
+    print("Writing to bronze layer using Parquet...")
+    bronze_parquet_path = "s3a://bronze/raw_data/world_bank"
     
-    # Write as Delta table with partitioning by year
-    write_delta_table(
-        df=spark_df,
-        table_path=bronze_delta_path,
-        mode="overwrite",
-        partition_by=["year"]
-    )
+    # Write as Parquet with partitioning by year
+    spark_df.write.mode("overwrite").partitionBy("year").parquet(bronze_parquet_path)
     
-    print(f" Bronze job completed. Delta table written to: {bronze_delta_path}")
+    print(f" Bronze job completed. Parquet files written to: {bronze_parquet_path}")
     
     return spark_df
 

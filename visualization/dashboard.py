@@ -23,6 +23,51 @@ import numpy as np
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Earthquake Dashboard"
 
+# Add custom CSS for better dropdown spacing
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            .Select-menu-outer {
+                max-height: 400px !important;
+            }
+            .Select-menu {
+                padding: 5px 0 !important;
+            }
+            .Select-option {
+                padding: 20px 15px !important;
+                line-height: 1.6 !important;
+                white-space: normal !important;
+                word-wrap: break-word !important;
+                min-height: 60px !important;
+                display: flex !important;
+                align-items: center !important;
+            }
+            .Select-option:hover {
+                background-color: #f8f9fa !important;
+            }
+            .Select-option.is-selected {
+                background-color: #007bff !important;
+                color: white !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
+
 def get_s3_client():
     """Get S3 client for MinIO"""
     return boto3.client(
@@ -38,8 +83,8 @@ def read_streaming_data():
     s3_client = get_s3_client()
     
     try:
-        # Read from streaming bucket - look for processed earthquake data
-        response = s3_client.list_objects_v2(Bucket=BUCKETS['streaming'], Prefix='processed_earthquakes/')
+        # Read from streaming bucket - look for earthquake data
+        response = s3_client.list_objects_v2(Bucket=BUCKETS['streaming'], Prefix='earthquake_data/')
         objects = response.get('Contents', [])
         
         if not objects:
@@ -63,9 +108,27 @@ def read_streaming_data():
         content = response['Body'].read().decode('utf-8')
         data = json.loads(content)
         
-        df = pd.DataFrame(data)
-        print(f" Earthquake data loaded: {df.shape}")
-        return df
+        # Process GeoJSON data to extract earthquake features
+        if 'features' in data:
+            earthquake_list = []
+            for feature in data['features']:
+                if 'properties' in feature and 'geometry' in feature:
+                    earthquake = {
+                        'magnitude': feature['properties'].get('mag', 0),
+                        'place': feature['properties'].get('place', 'Unknown'),
+                        'time': feature['properties'].get('time', 0),
+                        'latitude': feature['geometry']['coordinates'][1] if 'coordinates' in feature['geometry'] else 0,
+                        'longitude': feature['geometry']['coordinates'][0] if 'coordinates' in feature['geometry'] else 0,
+                        'depth': feature['geometry']['coordinates'][2] if len(feature['geometry'].get('coordinates', [])) > 2 else 0
+                    }
+                    earthquake_list.append(earthquake)
+            
+            df = pd.DataFrame(earthquake_list)
+            print(f" Earthquake data loaded: {df.shape}")
+            return df
+        else:
+            print("No features found in GeoJSON data")
+            return pd.DataFrame()
         
     except Exception as e:
         print(f" Error reading streaming earthquake data: {e}")
@@ -85,19 +148,32 @@ def read_static_data():
             print("No static data found in gold layer")
             return pd.DataFrame()
         
-        # Look for the new parquet data first, then fall back to old CSV data
+        # Look for the raw World Bank data first, then parquet, then other CSV files
         parquet_file = None
-        csv_files = []
+        raw_csv_file = None
+        other_csv_files = []
         
         for obj in objects:
             if obj['Key'].endswith('.parquet'):
                 parquet_file = obj['Key']
                 print(f"Found parquet data file: {parquet_file}")
+            elif 'world_bank_raw.csv' in obj['Key']:
+                raw_csv_file = obj['Key']
+                print(f"Found raw World Bank data file: {raw_csv_file}")
             elif obj['Key'].endswith('.csv'):
-                csv_files.append(obj['Key'])
+                other_csv_files.append(obj['Key'])
         
-        # Use parquet data if available, otherwise use the most recent CSV file
-        if parquet_file:
+        # Priority: raw CSV data > parquet data > other CSV files
+        if raw_csv_file:
+            obj_key = raw_csv_file
+            print(f"Using raw World Bank data file: {obj_key}")
+            
+            # Read CSV file
+            response = s3_client.get_object(Bucket=BUCKETS['gold'], Key=obj_key)
+            content = response['Body'].read().decode('utf-8')
+            df = pd.read_csv(io.StringIO(content))
+            
+        elif parquet_file:
             obj_key = parquet_file
             print(f"Using parquet data file: {obj_key}")
             
@@ -120,11 +196,11 @@ def read_static_data():
                     os.unlink(tmp_path)
                 return pd.DataFrame()
                 
-        elif csv_files:
+        elif other_csv_files:
             # Sort by last modified and use the most recent
-            csv_files.sort(key=lambda x: [obj['LastModified'] for obj in objects if obj['Key'] == x][0], reverse=True)
-            obj_key = csv_files[0]
-            print(f"Using CSV data file: {obj_key}")
+            other_csv_files.sort(key=lambda x: [obj['LastModified'] for obj in objects if obj['Key'] == x][0], reverse=True)
+            obj_key = other_csv_files[0]
+            print(f"Using other CSV data file: {obj_key}")
             
             # Read CSV file
             response = s3_client.get_object(Bucket=BUCKETS['gold'], Key=obj_key)
@@ -232,8 +308,8 @@ def create_earthquake_map(df, n_intervals):
     # Get the most recent earthquakes (last 20)
     recent_df = df.tail(20).copy()
     
-    # Convert timestamp to datetime
-    recent_df['timestamp'] = pd.to_datetime(recent_df['timestamp'])
+    # Convert time to datetime and create timestamp column
+    recent_df['timestamp'] = pd.to_datetime(recent_df['time'], unit='ms')
     
     # Read volcano data
     volcano_df = read_volcano_data()
@@ -540,8 +616,8 @@ def create_earthquake_table(earthquake_data, n_intervals=0):
     # Get all earthquakes (not just recent ones)
     table_df = earthquake_data.copy()
     
-    # Convert timestamp to datetime
-    table_df['timestamp'] = pd.to_datetime(table_df['timestamp'])
+    # Convert time to datetime and create timestamp column
+    table_df['timestamp'] = pd.to_datetime(table_df['time'], unit='ms')
     
     # Format timestamp for display
     table_df['time_display'] = table_df['timestamp'].dt.strftime('%H:%M:%S')
@@ -694,39 +770,7 @@ app.layout = dbc.Container([
                 html.Span("Country:", className="me-2 align-middle"),
                 dcc.Dropdown(
                     id="country-dropdown",
-                    options=[
-                        {"label": "All Countries", "value": "ALL"},
-                        {"label": "United States", "value": "US"},
-                        {"label": "China", "value": "CN"},
-                        {"label": "Japan", "value": "JP"},
-                        {"label": "Mexico", "value": "MX"},
-                        {"label": "Indonesia", "value": "ID"},
-                        {"label": "Turkey", "value": "TR"},
-                        {"label": "Russia", "value": "RU"},
-                        {"label": "India", "value": "IN"},
-                        {"label": "Brazil", "value": "BR"},
-                        {"label": "Canada", "value": "CA"},
-                        {"label": "Australia", "value": "AU"},
-                        {"label": "Germany", "value": "DE"},
-                        {"label": "France", "value": "FR"},
-                        {"label": "Italy", "value": "IT"},
-                        {"label": "United Kingdom", "value": "GB"},
-                        {"label": "South Korea", "value": "KR"},
-                        {"label": "Saudi Arabia", "value": "SA"},
-                        {"label": "Argentina", "value": "AR"},
-                        {"label": "South Africa", "value": "ZA"},
-                        {"label": "Chile", "value": "CL"},
-                        {"label": "Nepal", "value": "NP"},
-                        {"label": "Pakistan", "value": "PK"},
-                        {"label": "Philippines", "value": "PH"},
-                        {"label": "Honduras", "value": "HN"},
-                        {"label": "Nicaragua", "value": "NI"},
-                        {"label": "Tonga", "value": "TO"},
-                        {"label": "Tajikistan", "value": "TJ"},
-                        {"label": "Afghanistan", "value": "AF"},
-                        {"label": "Greece", "value": "GR"},
-                        {"label": "Iran", "value": "IR"}
-                    ],
+                    options=[{"label": "All Countries", "value": "ALL"}],  # Will be populated dynamically
                     placeholder="Select a country...",
                     style={"width": "200px", "display": "inline-block", "verticalAlign": "middle"},
                     className="me-3"
@@ -734,21 +778,11 @@ app.layout = dbc.Container([
                 html.Span(" Indicator:", className="me-2 align-right", style={"marginLeft": "40px"}),
                 dcc.Dropdown(
                     id="indicator-dropdown",
-                    options=[
-                        {"label": "GDP (current US$)", "value": "NY.GDP.MKTP.CD"},
-                        {"label": "GDP Growth (annual %)", "value": "NY.GDP.MKTP.KD.ZG"},
-                        {"label": "Agriculture (% of GDP)", "value": "NV.AGR.TOTL.ZS"},
-                        {"label": "Industry (% of GDP)", "value": "NV.IND.TOTL.ZS"},
-                        {"label": "Services (% of GDP)", "value": "NV.SRV.TOTL.ZS"},
-                        {"label": "Population, total", "value": "SP.POP.TOTL"},
-                        {"label": "Population density", "value": "EN.POP.DNST"},
-                        {"label": "Disaster risk reduction score", "value": "IP.PCR.SRCN.XQ"},
-                        {"label": "People affected by disasters (%)", "value": "VC.DSR.DRPT.P3"}
-                    ],
+                    options=[],  # Will be populated dynamically
                     placeholder="Select an indicator...",
                     style={"width": "200px", "display": "inline-block", "verticalAlign": "middle", "marginLeft": "10px"},
                     className="me-3",
-                    optionHeight=50
+                    optionHeight=80
                 ),
                 dbc.Button(" Reset Filters", id="reset-button", color="dark", className="ms-auto")
             ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"})
@@ -788,6 +822,128 @@ app.layout = dbc.Container([
     # Store for selected country from map
     dcc.Store(id="selected-country-store", data="")
 ], fluid=True)
+
+# Callback to populate indicator dropdown
+@app.callback(
+    Output('indicator-dropdown', 'options'),
+    [Input('interval-component', 'n_intervals')]
+)
+def update_indicator_dropdown(n_intervals):
+    """Update indicator dropdown options from World Bank data"""
+    static_data = read_static_data()
+    
+    if static_data.empty or 'indicator_id' not in static_data.columns or 'indicator_name' not in static_data.columns:
+        # Fallback to hardcoded options
+        return [
+            {"label": "GDP (current US$)", "value": "NY.GDP.MKTP.CD"},
+            {"label": "Population, total", "value": "SP.POP.TOTL"}
+        ]
+    
+    # Get unique indicators with data
+    indicator_data = static_data.groupby('indicator_id').agg({
+        'indicator_name': 'first',
+        'value': 'count'
+    }).reset_index()
+    
+    # Filter out indicators with no data
+    indicator_data = indicator_data[indicator_data['value'] > 0]
+    
+    # Create options sorted by record count (most data first)
+    options = []
+    for _, row in indicator_data.sort_values('value', ascending=False).iterrows():
+        options.append({
+            "label": row['indicator_name'],
+            "value": row['indicator_id']
+        })
+    
+    return options
+
+# Callback to populate country dropdown
+@app.callback(
+    Output('country-dropdown', 'options'),
+    [Input('interval-component', 'n_intervals')]
+)
+def update_country_dropdown(n_intervals):
+    """Update country dropdown options from World Bank data"""
+    static_data = read_static_data()
+    
+    if static_data.empty or 'country_code' not in static_data.columns or 'country_name' not in static_data.columns:
+        # Fallback to hardcoded options
+        return [
+            {"label": "All Countries", "value": "ALL"},
+            {"label": "United States", "value": "US"},
+            {"label": "China", "value": "CN"},
+            {"label": "Japan", "value": "JP"},
+            {"label": "Mexico", "value": "MX"},
+            {"label": "Indonesia", "value": "ID"},
+            {"label": "Turkey", "value": "TR"},
+            {"label": "Russia", "value": "RU"},
+            {"label": "India", "value": "IN"},
+            {"label": "Brazil", "value": "BR"},
+            {"label": "Canada", "value": "CA"},
+            {"label": "Australia", "value": "AU"},
+            {"label": "Germany", "value": "DE"},
+            {"label": "France", "value": "FR"},
+            {"label": "Italy", "value": "IT"},
+            {"label": "United Kingdom", "value": "GB"},
+            {"label": "South Korea", "value": "KR"},
+            {"label": "Saudi Arabia", "value": "SA"},
+            {"label": "Argentina", "value": "AR"},
+            {"label": "South Africa", "value": "ZA"},
+            {"label": "Chile", "value": "CL"},
+            {"label": "Nepal", "value": "NP"},
+            {"label": "Pakistan", "value": "PK"},
+            {"label": "Philippines", "value": "PH"},
+            {"label": "Honduras", "value": "HN"},
+            {"label": "Nicaragua", "value": "NI"},
+            {"label": "Tonga", "value": "TO"},
+            {"label": "Tajikistan", "value": "TJ"},
+            {"label": "Afghanistan", "value": "AF"},
+            {"label": "Greece", "value": "GR"},
+            {"label": "Iran", "value": "IR"}
+        ]
+    
+    # Create options from World Bank data
+    country_mapping = static_data[['country_code', 'country_name']].drop_duplicates()
+    country_mapping = country_mapping.dropna()  # Remove any NaN values
+    
+    options = [{"label": "All Countries", "value": "ALL"}]
+    
+    # Separate individual countries from regional groupings
+    # Individual countries are typically 2-letter codes and have standard country names
+    individual_countries = country_mapping[
+        (country_mapping['country_code'].str.len() == 2) & 
+        (~country_mapping['country_name'].str.contains('Africa|Asia|Europe|America|Caribbean|Pacific|World|income|dividend|states|area|Union|IDA|IBRD|HIPC|fragile|conflict', case=False, na=False))
+    ]
+    
+    # Add individual countries first
+    for _, row in individual_countries.iterrows():
+        options.append({
+            "label": row['country_name'],
+            "value": row['country_code']
+        })
+    
+    # Add regional groupings (limit to most important ones)
+    regional_countries = country_mapping[
+        (~country_mapping['country_code'].str.len() == 2) | 
+        (country_mapping['country_name'].str.contains('Africa|Asia|Europe|America|Caribbean|Pacific|World|income|dividend|states|area|Union|IDA|IBRD|HIPC|fragile|conflict', case=False, na=False))
+    ]
+    
+    # Add only the most important regional groupings
+    important_regions = regional_countries[
+        regional_countries['country_name'].str.contains('World|European Union|Euro area|Arab World|East Asia|South Asia|Sub-Saharan Africa|Latin America', case=False, na=False)
+    ]
+    
+    for _, row in important_regions.iterrows():
+        options.append({
+            "label": f"{row['country_name']} (Region)",
+            "value": row['country_code']
+        })
+    
+    # Sort by country name
+    options[1:] = sorted(options[1:], key=lambda x: x['label'])
+    
+    return options
 
 # Callback to update chart and status
 @app.callback(
@@ -849,15 +1005,25 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
             font=dict(size=16, color="gray")
         )
     
-    # Get country name from code
-    country_code_to_name = {
-        'US': 'United States', 'CN': 'China', 'JP': 'Japan', 'MX': 'Mexico', 'ID': 'Indonesia', 
-        'TR': 'Turkey', 'RU': 'Russia', 'IN': 'India', 'BR': 'Brazil', 'CA': 'Canada', 
-        'AU': 'Australia', 'DE': 'Germany', 'FR': 'France', 'IT': 'Italy', 'GB': 'United Kingdom', 
-        'KR': 'South Korea', 'SA': 'Saudi Arabia', 'AR': 'Argentina', 'ZA': 'South Africa', 
-        'CL': 'Chile', 'NP': 'Nepal', 'PK': 'Pakistan', 'PH': 'Philippines', 'HN': 'Honduras',
-        'NI': 'Nicaragua', 'TO': 'Tonga', 'TJ': 'Tajikistan', 'AF': 'Afghanistan', 'GR': 'Greece', 'IR': 'Iran'
-    }
+    # Get country name from code - use actual World Bank data
+    if not static_data.empty and 'country_code' in static_data.columns and 'country_name' in static_data.columns:
+        # Create mapping from actual World Bank data
+        country_mapping = static_data[['country_code', 'country_name']].drop_duplicates()
+        country_code_to_name = dict(zip(country_mapping['country_code'], country_mapping['country_name']))
+        print(f"Using {len(country_code_to_name)} countries from World Bank data")
+    else:
+        # Fallback to hardcoded mapping
+        country_code_to_name = {
+            'US': 'United States', 'CN': 'China', 'JP': 'Japan', 'MX': 'Mexico', 'ID': 'Indonesia', 
+            'TR': 'Turkey', 'RU': 'Russia', 'IN': 'India', 'BR': 'Brazil', 'CA': 'Canada', 
+            'AU': 'Australia', 'DE': 'Germany', 'FR': 'France', 'IT': 'Italy', 'GB': 'United Kingdom', 
+            'KR': 'South Korea', 'SA': 'Saudi Arabia', 'AR': 'Argentina', 'ZA': 'South Africa', 
+            'CL': 'Chile', 'NP': 'Nepal', 'PK': 'Pakistan', 'PH': 'Philippines', 'HN': 'Honduras',
+            'NI': 'Nicaragua', 'TO': 'Tonga', 'TJ': 'Tajikistan', 'AF': 'Afghanistan', 'GR': 'Greece', 'IR': 'Iran'
+        }
+    
+    # Initialize title variable
+    title = "Country Indicator Over Time"
     
     years = list(range(2015, 2026))
     fig = go.Figure()
@@ -867,90 +1033,216 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
               '#a6cee3', '#fb9a99', '#fdbf6f', '#cab2d6', '#ffff99', '#b15928', '#fbb4ae', '#b3cde3', '#ccebc5', '#decbe4',
               '#fed9a6', '#ffffcc', '#e5d8bd', '#fddaec', '#f2f2f2', '#b3e2cd', '#fdcdac', '#cbd5e8', '#f4cae4', '#e6f5c9']
     
-    if country == "ALL" or not country:
-        # Show all countries for the selected indicator
-        all_countries = list(country_code_to_name.keys())
+    # Get indicator display name for title from actual data
+    if not static_data.empty and 'indicator_id' in static_data.columns and 'indicator_name' in static_data.columns:
+        # Get the actual indicator name from the data
+        indicator_info = static_data[static_data['indicator_id'] == selected_indicator]
+        if not indicator_info.empty:
+            indicator_display_name = indicator_info['indicator_name'].iloc[0]
+        else:
+            indicator_display_name = selected_indicator
+    else:
+        # Fallback to hardcoded names
+        indicator_names = {
+            'NY.GDP.MKTP.CD': 'GDP (current US$)',
+            'NY.GDP.MKTP.KD.ZG': 'GDP Growth (annual %)',
+            'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
+            'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
+            'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
+            'SP.POP.TOTL': 'Population, total',
+            'EN.POP.DNST': 'Population density',
+            'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
+            'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
+        }
+        indicator_display_name = indicator_names.get(selected_indicator, selected_indicator)
+    
+    # Filter data based on country selection
+    if not static_data.empty and 'indicator_id' in static_data.columns:
+        # Filter data for the selected indicator
+        indicator_data = static_data[static_data['indicator_id'] == selected_indicator]
         
-        for i, country_code in enumerate(all_countries):
-            country_name = country_code_to_name[country_code]
+        if not indicator_data.empty:
+            # Set title based on selection
+            if country == "ALL" or not country:
+                title = f" {indicator_display_name} - All Countries (2015-2025) - Click legend to filter"
+                # Show all countries for the selected indicator
+                countries_with_data = indicator_data['country_code'].unique()
+                
+                for i, country_code in enumerate(countries_with_data[:20]):  # Limit to first 20 countries
+                    country_name = country_code_to_name.get(country_code, country_code)
+                    
+                    # Get data for this country and indicator
+                    country_data = indicator_data[indicator_data['country_code'] == country_code]
+                    
+                    if not country_data.empty:
+                        # Sort by year and get values
+                        country_data = country_data.sort_values('year')
+                        years_data = country_data['year'].tolist()
+                        values_data = country_data['value'].tolist()
+                        
+                        # Only add if we have data
+                        if years_data and values_data:
+                            fig.add_trace(go.Scatter(
+                                x=years_data,
+                                y=values_data,
+                                mode='lines+markers',
+                                name=country_name,
+                                line=dict(color=colors[i % len(colors)], width=2),
+                                marker=dict(size=6),
+                                hovertemplate=f'<b>{country_name}</b><br>' +
+                                             f'Year: %{{x}}<br>' +
+                                             f'Value: %{{y:,.0f}}<br>' +
+                                             '<extra></extra>',
+                                customdata=[country_code] * len(years_data),
+                                legendgroup=country_name
+                            ))
+            else:
+                # Show only the selected country
+                country_name = country_code_to_name.get(country, country)
+                title = f" {indicator_display_name} - {country_name} (2015-2025)"
+                
+                # Get data for this specific country and indicator
+                country_data = indicator_data[indicator_data['country_code'] == country]
+                
+                if not country_data.empty:
+                    # Sort by year and get values
+                    country_data = country_data.sort_values('year')
+                    years_data = country_data['year'].tolist()
+                    values_data = country_data['value'].tolist()
+                    
+                    if years_data and values_data:
+                        fig.add_trace(go.Scatter(
+                            x=years_data,
+                            y=values_data,
+                            mode='lines+markers',
+                            name=country_name,
+                            line=dict(color='#1f77b4', width=3),
+                            marker=dict(size=8),
+                            hovertemplate=f'<b>{country_name}</b><br>' +
+                                         f'Year: %{{x}}<br>' +
+                                         f'Value: %{{y:,.0f}}<br>' +
+                                         '<extra></extra>'
+                        ))
+                    else:
+                        # No data for this country/indicator combination
+                        fig.add_annotation(
+                            text=f"No {indicator_display_name} data available for {country_name}",
+                            xref="paper", yref="paper",
+                            x=0.5, y=0.5, showarrow=False,
+                            font=dict(size=16, color="gray")
+                        )
+                else:
+                    # No data for this country/indicator combination
+                    fig.add_annotation(
+                        text=f"No {indicator_display_name} data available for {country_name}",
+                        xref="paper", yref="paper",
+                        x=0.5, y=0.5, showarrow=False,
+                        font=dict(size=16, color="gray")
+                    )
+        else:
+            # No data for this indicator, show message
+            fig.add_annotation(
+                text=f"No data available for {selected_indicator}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16, color="gray")
+            )
+    else:
+        # Fallback to sample data if no real data available
+        if country == "ALL" or not country:
+            all_countries = list(country_code_to_name.keys())[:10]  # Limit to 10 countries
             
-            # Generate sample data based on indicator type and country
+            for i, country_code in enumerate(all_countries):
+                country_name = country_code_to_name[country_code]
+                
+                # Generate sample data based on indicator type and country
+                if selected_indicator == "NY.GDP.MKTP.CD":  # GDP
+                    base_value = 1000000000000 * (0.5 + i * 0.1)  # Vary by country
+                    values = [base_value * (1 + 0.02 * (year - 2015) + np.random.normal(0, 0.05)) for year in years]
+                elif selected_indicator == "SP.POP.TOTL":  # Population
+                    base_value = 100000000 * (0.3 + i * 0.05)  # Vary by country
+                    values = [base_value * (1 + 0.01 * (year - 2015)) for year in years]
+                elif selected_indicator == "EN.POP.DNST":  # Population density
+                    base_value = 100 * (0.5 + i * 0.1)  # Vary by country
+                    values = [base_value * (1 + 0.005 * (year - 2015)) for year in years]
+                else:  # Other indicators
+                    base_value = 50 * (0.5 + i * 0.1)  # Vary by country
+                    values = [base_value + np.random.normal(0, 5) for year in years]
+                
+                fig.add_trace(go.Scatter(
+                    x=years,
+                    y=values,
+                    mode='lines+markers',
+                    name=country_name,
+                    line=dict(color=colors[i % len(colors)], width=2),
+                    marker=dict(size=6),
+                    hovertemplate=f'<b>{country_name}</b><br>' +
+                                 f'Year: %{{x}}<br>' +
+                                 f'Value: %{{y:,.0f}}<br>' +
+                                 '<extra></extra>',
+                    customdata=[country_code] * len(years),
+                    legendgroup=country_name
+                ))
+        else:
+            # Show single country with sample data
+            country_name = country_code_to_name.get(country, country)
+            
+            # Generate sample data for this country
             if selected_indicator == "NY.GDP.MKTP.CD":  # GDP
-                base_value = 1000000000000 * (0.5 + i * 0.1)  # Vary by country
+                base_value = 1000000000000 * 0.8
                 values = [base_value * (1 + 0.02 * (year - 2015) + np.random.normal(0, 0.05)) for year in years]
             elif selected_indicator == "SP.POP.TOTL":  # Population
-                base_value = 100000000 * (0.3 + i * 0.05)  # Vary by country
+                base_value = 100000000 * 0.5
                 values = [base_value * (1 + 0.01 * (year - 2015)) for year in years]
             elif selected_indicator == "EN.POP.DNST":  # Population density
-                base_value = 100 * (0.5 + i * 0.1)  # Vary by country
+                base_value = 100 * 0.7
                 values = [base_value * (1 + 0.005 * (year - 2015)) for year in years]
             else:  # Other indicators
-                base_value = 50 * (0.5 + i * 0.1)  # Vary by country
+                base_value = 50 * 0.8
                 values = [base_value + np.random.normal(0, 5) for year in years]
             
             fig.add_trace(go.Scatter(
                 x=years,
                 y=values,
                 mode='lines+markers',
-                name=country_name,  # Use natural country name in legend
-                line=dict(color=colors[i % len(colors)], width=2),
-                marker=dict(size=6),
+                name=country_name,
+                line=dict(color='#1f77b4', width=3),
+                marker=dict(size=8),
                 hovertemplate=f'<b>{country_name}</b><br>' +
                              f'Year: %{{x}}<br>' +
                              f'Value: %{{y:,.0f}}<br>' +
-                             '<extra></extra>',
-                customdata=[country_code] * len(years),  # Store country code for legend clicks
-                legendgroup=country_name,  # Use country name for legend grouping
-                legendgrouptitle_text=country_name
+                             '<extra></extra>'
             ))
         
-        # Get indicator display name for title
-        indicator_names = {
-            'NY.GDP.MKTP.CD': 'GDP (current US$)',
-            'NY.GDP.MKTP.KD.ZG': 'GDP Growth (annual %)',
-            'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
-            'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
-            'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
-            'SP.POP.TOTL': 'Population, total',
-            'EN.POP.DNST': 'Population density',
-            'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
-            'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
-        }
-        indicator_display_name = indicator_names.get(selected_indicator, selected_indicator)
-        title = f" {indicator_display_name} - All Countries (2015-2025) - Click legend to filter"
+        # Get indicator display name for title from actual data
+        if not static_data.empty and 'indicator_id' in static_data.columns and 'indicator_name' in static_data.columns:
+            # Get the actual indicator name from the data
+            indicator_info = static_data[static_data['indicator_id'] == selected_indicator]
+            if not indicator_info.empty:
+                indicator_display_name = indicator_info['indicator_name'].iloc[0]
+            else:
+                indicator_display_name = selected_indicator
+        else:
+            # Fallback to hardcoded names
+            indicator_names = {
+                'NY.GDP.MKTP.CD': 'GDP (current US$)',
+                'NY.GDP.MKTP.KD.ZG': 'GDP Growth (annual %)',
+                'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
+                'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
+                'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
+                'SP.POP.TOTL': 'Population, total',
+                'EN.POP.DNST': 'Population density',
+                'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
+                'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
+            }
+            indicator_display_name = indicator_names.get(selected_indicator, selected_indicator)
         
-    else:
-        # Show single country
-        country_name = country_code_to_name.get(country, country)
-        
-        # No sample series. If static data is needed for the line chart,
-        # integrate real World Bank time series from the gold layer.
-        values = []
-        
-        # Get indicator display name
-        indicator_names = {
-            'NY.GDP.MKTP.CD': 'GDP (current US$)',
-            'NY.GDP.MKTP.KD.ZG': 'GDP Growth (annual %)',
-            'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
-            'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
-            'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
-            'SP.POP.TOTL': 'Population, total',
-            'EN.POP.DNST': 'Population density',
-            'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
-            'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
-        }
-        indicator_display_name = indicator_names.get(selected_indicator, selected_indicator)
-        
-        # If no real values are available, return an empty figure with a note
-        if not values:
-            return go.Figure().add_annotation(
-                text=f"No {indicator_display_name} data available for {country_name}",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16, color="gray")
-            )
-        
-        title = f" {indicator_display_name} - {country_name} (2015-2025)"
+        # Set title based on selection
+        if country == "ALL" or not country:
+            title = f" {indicator_display_name} - All Countries (2015-2025) - Click legend to filter"
+        else:
+            country_name = country_code_to_name.get(country, country)
+            title = f" {indicator_display_name} - {country_name} (2015-2025)"
     
     # Update layout with interactive legend
     fig.update_layout(

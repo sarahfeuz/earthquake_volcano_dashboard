@@ -38,22 +38,12 @@ def main():
         print("="*50)
         gold_df = run_gold_job(spark, silver_df)
         
-        # Delta Lake maintenance operations
+        # Data maintenance operations
         print("\n" + "="*50)
-        print("DELTA LAKE MAINTENANCE")
+        print("DATA MAINTENANCE")
         print("="*50)
         
-        # Optimize Delta tables for better performance
-        print("Optimizing Delta tables...")
-        optimize_delta_table("s3a://bronze/raw_data/world_bank")
-        optimize_delta_table("s3a://silver/processed_data/world_bank")
-        optimize_delta_table("s3a://gold/aggregated_data/world_bank")
-        
-        # Vacuum old files (keep last 7 days)
-        print("Vacuuming old Delta table files...")
-        vacuum_delta_table("s3a://bronze/raw_data/world_bank", retention_hours=168)
-        vacuum_delta_table("s3a://silver/processed_data/world_bank", retention_hours=168)
-        vacuum_delta_table("s3a://gold/aggregated_data/world_bank", retention_hours=168)
+        print("Data processing completed successfully!")
         
         print("\n" + "="*50)
         print(" PIPELINE COMPLETED SUCCESSFULLY!")

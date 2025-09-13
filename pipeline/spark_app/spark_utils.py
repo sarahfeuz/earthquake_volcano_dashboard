@@ -6,7 +6,7 @@ from config.minio_config import MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_K
 
 def get_spark_session(app_name="PipelineApp", use_s3=True):
     if use_s3:
-        # S3-enabled Spark session with Delta Lake support
+        # S3-enabled Spark session without Delta Lake (simplified)
         spark = (
             SparkSession.builder
             .appName(app_name)
@@ -20,25 +20,14 @@ def get_spark_session(app_name="PipelineApp", use_s3=True):
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
             .config("spark.hadoop.fs.s3a.connection.maximum", "1000")
             .config("spark.hadoop.fs.s3a.threads.max", "20")
-            # Delta Lake configurations
-            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-            .config("spark.databricks.delta.retentionDurationCheck.enabled", "false")
-            .config("spark.databricks.delta.constraints.enabled", "false")
-            .config("spark.databricks.delta.merge.repartitionBeforeWrite", "true")
-            .config("spark.databricks.delta.optimizeWrite.enabled", "true")
-            .config("spark.databricks.delta.autoOptimize.optimizeWrite", "true")
-            .config("spark.databricks.delta.autoOptimize.autoCompact", "true")
             .getOrCreate()
         )
     else:
-        # Local-only Spark session with Delta Lake support
+        # Local-only Spark session without Delta Lake
         spark = (
             SparkSession.builder
             .appName(app_name)
             .master("local[*]")  # Use local mode
-            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
             .getOrCreate()
         )
 

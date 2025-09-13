@@ -23,10 +23,10 @@ def run_gold_job(spark, silver_df=None):
     print("Running Gold job...")
     
     if silver_df is None:
-        # Read from silver layer Delta table if not provided
-        print("Reading from silver layer Delta table...")
-        silver_delta_path = "s3a://silver/processed_data/world_bank"
-        silver_df = read_delta_table(spark, silver_delta_path)
+        # Read from silver layer Parquet files if not provided
+        print("Reading from silver layer Parquet files...")
+        silver_parquet_path = "s3a://silver/processed_data/world_bank"
+        silver_df = spark.read.parquet(silver_parquet_path)
     else:
         print("Using provided silver dataframe")
     
@@ -102,18 +102,13 @@ def run_gold_job(spark, silver_df=None):
     gold_df.show(10, truncate=False)
     
     # Write to gold layer using Delta Lake
-    print("Writing to gold layer using Delta Lake...")
-    gold_delta_path = "s3a://gold/aggregated_data/world_bank"
+    print("Writing to gold layer using Parquet...")
+    gold_parquet_path = "s3a://gold/aggregated_data/world_bank"
     
-    # Write as Delta table with partitioning by country_code and indicator_category
-    write_delta_table(
-        df=gold_df,
-        table_path=gold_delta_path,
-        mode="overwrite",
-        partition_by=["country_code", "indicator_category"]
-    )
+    # Write as Parquet with partitioning by country_code and indicator_category
+    gold_df.write.mode("overwrite").partitionBy("country_code", "indicator_category").parquet(gold_parquet_path)
     
-    print(f" Gold job completed. Delta table written to: {gold_delta_path}")
+    print(f" Gold job completed. Parquet files written to: {gold_parquet_path}")
     
     return gold_df
 

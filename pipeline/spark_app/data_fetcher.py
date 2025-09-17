@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-World Bank Data Fetcher for Economic and Disaster Risk Indicators
+World Bank Data Fetcher
 """
 
 import requests
@@ -8,7 +8,7 @@ import pandas as pd
 import time
 from datetime import datetime
 
-# Countries for economic and disaster risk analysis
+# Countries for economic and disaster risk analysis (reduced for memory efficiency)
 COUNTRIES = [
     "MX",  # Mexico
     "ID",  # Indonesia
@@ -16,59 +16,34 @@ COUNTRIES = [
     "TR",  # Turkey
     "CN",  # China
     "JP",  # Japan
-    "IR",  # Iran
     "US",  # United States
     "CL",  # Chile
     "RU",  # Russia
-    "NP",  # Nepal
-    "IN",  # India
-    "PK",  # Pakistan
-    "PH",  # Philippines
-    "HN",  # Honduras
-    "NI",  # Nicaragua
-    "TO",  # Tonga
-    "TJ",  # Tajikistan
-    "AR",  # Argentina
-    "AF"   # Afghanistan
+    "IN"   # India
 ]
 
-# Economic and Disaster Risk Indicators
+# Economic and Disaster Risk Indicators (reduced for memory efficiency)
 INDICATORS = [
     "NY.GDP.MKTP.CD",      # GDP (current US$) – total economic output at current prices
     "NY.GDP.MKTP.KD.ZG",   # GDP growth (annual %) – year-over-year growth rate of GDP
-    "NV.AGR.TOTL.ZS",      # Agriculture, value added (% of GDP) – contribution of agriculture sector to GDP
-    "NV.IND.TOTL.ZS",      # Industry, value added (% of GDP) – contribution of industry sector to GDP
-    "NV.SRV.TOTL.ZS",      # Services, value added (% of GDP) – contribution of services sector to GDP
-    "SP.POP.TOTL",         # Population, total – total number of people
-    "EN.POP.DNST",         # Population density (people per sq. km of land area)
-    "IP.PCR.SRCN.XQ",      # Disaster risk reduction progress score – scale of 1–5, higher = better preparedness
-    "VC.DSR.DRPT.P3"       # People affected by droughts, floods, extreme temperatures (% of population)
+    "FP.CPI.TOTL.ZG",      # Inflation, consumer prices (annual %) – price level changes
+    "EN.POP.DNST"          # Population density (people per sq. km of land area)
 ]
 
 # Indicator descriptions for better labeling
 INDICATOR_DESCRIPTIONS = {
     "NY.GDP.MKTP.CD": "GDP (current US$)",
     "NY.GDP.MKTP.KD.ZG": "GDP Growth (annual %)",
-    "NV.AGR.TOTL.ZS": "Agriculture (% of GDP)",
-    "NV.IND.TOTL.ZS": "Industry (% of GDP)",
-    "NV.SRV.TOTL.ZS": "Services (% of GDP)",
-    "SP.POP.TOTL": "Population, Total",
-    "EN.POP.DNST": "Population Density",
-    "IP.PCR.SRCN.XQ": "Disaster Risk Reduction Score",
-    "VC.DSR.DRPT.P3": "People Affected by Climate Disasters (%)"
+    "FP.CPI.TOTL.ZG": "Inflation, Consumer Prices (annual %)",
+    "EN.POP.DNST": "Population Density"
 }
 
 # Indicator categories for analysis
 INDICATOR_CATEGORIES = {
     "NY.GDP.MKTP.CD": "Economic",
     "NY.GDP.MKTP.KD.ZG": "Economic",
-    "NV.AGR.TOTL.ZS": "Economic",
-    "NV.IND.TOTL.ZS": "Economic",
-    "NV.SRV.TOTL.ZS": "Economic",
-    "SP.POP.TOTL": "Demographic",
-    "EN.POP.DNST": "Demographic",
-    "IP.PCR.SRCN.XQ": "Disaster Risk",
-    "VC.DSR.DRPT.P3": "Disaster Risk"
+    "FP.CPI.TOTL.ZG": "Economic",
+    "EN.POP.DNST": "Demographic"
 }
 
 def get_country_name(country_code):
@@ -163,11 +138,11 @@ def fetch_world_bank_data_main():
         # Fetch real data from the API only
         data = fetch_all_world_bank_data()
         if data:
-            print(f" Successfully fetched {len(data)} data points from World Bank API")
+            print(f"Successfully fetched {len(data)} data points from World Bank API")
         else:
             print("  No data fetched from API")
     except Exception as e:
-        print(f" Error fetching from World Bank API: {e}")
+        print(f"Error fetching from World Bank API: {e}")
         data = []
     
     if data:
@@ -178,6 +153,23 @@ def fetch_world_bank_data_main():
         
         # Filter to valid years
         df = df[df['year'].between(2015, 2025)]
+        
+        # Ensure all columns have proper data types for Spark
+        df['country_code'] = df['country_code'].astype(str)
+        df['country_name'] = df['country_name'].astype(str)
+        df['indicator_id'] = df['indicator_id'].astype(str)
+        df['indicator_name'] = df['indicator_name'].astype(str)
+        df['indicator_category'] = df['indicator_category'].astype(str)
+        df['year'] = df['year'].astype('int32')
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        df['unit'] = df['unit'].astype(str)
+        df['obs_status'] = df['obs_status'].astype(str)
+        df['decimal'] = df['decimal'].astype('int32')
+        df['indicator_description'] = df['indicator_description'].astype(str)
+        df['source'] = df['source'].astype(str)
+        
+        # Remove any rows with null values in critical columns
+        df = df.dropna(subset=['country_code', 'indicator_id', 'year', 'value'])
         
         print(f" Fetched {len(df)} data points")
         print(f" Data shape: {df.shape}")

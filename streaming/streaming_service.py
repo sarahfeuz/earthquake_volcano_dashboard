@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Streaming Data Service
-Fetches real-time earthquake data and volcano eruption data from APIs
 """
 
 import requests
@@ -54,7 +53,7 @@ def send_to_kafka(producer, topic, data, key=None):
         logger.error(f"Failed to send data to Kafka: {e}")
 
 def upload_to_minio(data, filename, data_type='earthquake'):
-    """Upload data to MinIO"""
+    """Upload data to MinIO and keep only the last 5 files"""
     try:
         import boto3
         from botocore.exceptions import ClientError
@@ -70,8 +69,10 @@ def upload_to_minio(data, filename, data_type='earthquake'):
         # Determine the path based on data type
         if data_type == 'volcano':
             s3_key = f'volcano_data/{filename}'
+            prefix = 'volcano_data/'
         else:
             s3_key = f'earthquake_data/{filename}'
+            prefix = 'earthquake_data/'
         
         # Upload data
         s3_client.put_object(
@@ -81,8 +82,40 @@ def upload_to_minio(data, filename, data_type='earthquake'):
         )
         logger.info(f"Uploaded {filename} to MinIO at {s3_key}")
         
+        # Clean up old files - keep only the last 5
+        cleanup_old_files(s3_client, prefix, max_files=5)
+        
     except Exception as e:
         logger.error(f"Failed to upload to MinIO: {e}")
+
+def cleanup_old_files(s3_client, prefix, max_files=5):
+    """Keep only the last max_files files in the given prefix"""
+    try:
+        # List all objects with the given prefix
+        response = s3_client.list_objects_v2(
+            Bucket='streaming',
+            Prefix=prefix
+        )
+        
+        if 'Contents' not in response:
+            return
+        
+        # Sort by LastModified date (newest first)
+        objects = sorted(response['Contents'], 
+                        key=lambda x: x['LastModified'], 
+                        reverse=True)
+        
+        # Delete files beyond the max_files limit
+        if len(objects) > max_files:
+            files_to_delete = objects[max_files:]
+            for obj in files_to_delete:
+                s3_client.delete_object(Bucket='streaming', Key=obj['Key'])
+                logger.info(f"Deleted old file: {obj['Key']}")
+            
+            logger.info(f"Cleaned up {len(files_to_delete)} old files, keeping {max_files} most recent")
+        
+    except Exception as e:
+        logger.error(f"Failed to cleanup old files: {e}")
 
 def fetch_earthquake_data():
     """Fetch earthquake data from USGS API"""

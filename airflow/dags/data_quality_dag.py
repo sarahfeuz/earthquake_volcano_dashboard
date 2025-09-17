@@ -1,6 +1,5 @@
 """
 Data Quality Monitoring DAG
-Validates data quality across Bronze, Silver, and Gold layers
 """
 
 from datetime import datetime, timedelta

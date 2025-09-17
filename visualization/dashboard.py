@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Data Pipeline Visualization Dashboard
-Simple streaming chart with real-time updates
 """
 
 import dash
@@ -131,90 +130,70 @@ def read_streaming_data():
             return pd.DataFrame()
         
     except Exception as e:
-        print(f" Error reading streaming earthquake data: {e}")
+        print(f"Error reading streaming earthquake data: {e}")
         return pd.DataFrame()
 
 def read_static_data():
-    """Read static World Bank data from gold layer"""
+    """Read static World Bank data, prioritizing raw bronze, then silver, then gold."""
     print(f" Reading static World Bank data at {datetime.now().strftime('%H:%M:%S')}")
     s3_client = get_s3_client()
-    
+
+    def read_csv_from(bucket, key):
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        content = resp['Body'].read().decode('utf-8')
+        return pd.read_csv(io.StringIO(content))
+
     try:
-        # Read from gold layer - try the new parquet data first
-        response = s3_client.list_objects_v2(Bucket=BUCKETS['gold'], Prefix='aggregated_data/')
-        objects = response.get('Contents', [])
-        
-        if not objects:
-            print("No static data found in gold layer")
-            return pd.DataFrame()
-        
-        # Look for the raw World Bank data first, then parquet, then other CSV files
-        parquet_file = None
-        raw_csv_file = None
-        other_csv_files = []
-        
-        for obj in objects:
-            if obj['Key'].endswith('.parquet'):
-                parquet_file = obj['Key']
-                print(f"Found parquet data file: {parquet_file}")
-            elif 'world_bank_raw.csv' in obj['Key']:
-                raw_csv_file = obj['Key']
-                print(f"Found raw World Bank data file: {raw_csv_file}")
-            elif obj['Key'].endswith('.csv'):
-                other_csv_files.append(obj['Key'])
-        
-        # Priority: raw CSV data > parquet data > other CSV files
-        if raw_csv_file:
-            obj_key = raw_csv_file
-            print(f"Using raw World Bank data file: {obj_key}")
-            
-            # Read CSV file
-            response = s3_client.get_object(Bucket=BUCKETS['gold'], Key=obj_key)
-            content = response['Body'].read().decode('utf-8')
-            df = pd.read_csv(io.StringIO(content))
-            
-        elif parquet_file:
-            obj_key = parquet_file
-            print(f"Using parquet data file: {obj_key}")
-            
-            # Read parquet file
-            response = s3_client.get_object(Bucket=BUCKETS['gold'], Key=obj_key)
-            content = response['Body'].read()
-            
-            # Write to temporary file and read with pandas
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp_file:
-                tmp_file.write(content)
-                tmp_path = tmp_file.name
-            
-            try:
-                df = pd.read_parquet(tmp_path)
-                os.unlink(tmp_path)  # Clean up temp file
-            except Exception as e:
-                print(f"Error reading parquet file: {e}")
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                return pd.DataFrame()
-                
-        elif other_csv_files:
-            # Sort by last modified and use the most recent
-            other_csv_files.sort(key=lambda x: [obj['LastModified'] for obj in objects if obj['Key'] == x][0], reverse=True)
-            obj_key = other_csv_files[0]
-            print(f"Using other CSV data file: {obj_key}")
-            
-            # Read CSV file
-            response = s3_client.get_object(Bucket=BUCKETS['gold'], Key=obj_key)
-            content = response['Body'].read().decode('utf-8')
-            df = pd.read_csv(io.StringIO(content))
-        else:
-            print("No data files found in gold layer")
-            return pd.DataFrame()
-        
-        print(f" Static data loaded: {df.shape}")
-        return df
-        
+        # 1) Prefer bronze raw CSV
+        try:
+            print(f" Attempting to read from bronze bucket: {BUCKETS['bronze']}")
+            resp = s3_client.list_objects_v2(Bucket=BUCKETS['bronze'], Prefix='raw_data/')
+            objs = resp.get('Contents', [])
+            print(f" Bronze objects found: {[o['Key'] for o in objs]}")
+            raw = [o for o in objs if o['Key'].endswith('world_bank_raw.csv')]
+            if raw:
+                print(f" Using bronze file: {raw[0]['Key']}")
+                df = read_csv_from(BUCKETS['bronze'], raw[0]['Key'])
+                print(f" Static data loaded from bronze: {df.shape}")
+                return df
+            else:
+                print(" No world_bank_raw.csv found in bronze bucket")
+        except Exception as e:
+            print(f"Bronze read attempt failed: {e}")
+
+        # 2) Fallback to silver processed CSV
+        try:
+            resp = s3_client.list_objects_v2(Bucket=BUCKETS['silver'], Prefix='processed_data/')
+            objs = resp.get('Contents', [])
+            proc = [o for o in objs if o['Key'].endswith('world_bank_processed.csv')]
+            if proc:
+                print(f"Using silver file: {proc[0]['Key']}")
+                df = read_csv_from(BUCKETS['silver'], proc[0]['Key'])
+                print(f"Static data loaded from silver: {df.shape}")
+                return df
+        except Exception as e:
+            print(f"Silver read attempt failed: {e}")
+
+        # 3) Last resort: gold aggregated CSV (note: aggregated, not per-year detail)
+        try:
+            resp = s3_client.list_objects_v2(Bucket=BUCKETS['gold'], Prefix='aggregated_data/')
+            objs = resp.get('Contents', [])
+            gold_csvs = [o for o in objs if o['Key'].endswith('.csv')]
+            if gold_csvs:
+                # pick latest by LastModified
+                latest = sorted(gold_csvs, key=lambda x: x['LastModified'], reverse=True)[0]
+                print(f"Using gold aggregated file: {latest['Key']}")
+                df = read_csv_from(BUCKETS['gold'], latest['Key'])
+                print(f"Static data loaded from gold: {df.shape}")
+                return df
+        except Exception as e:
+            print(f"Gold read attempt failed: {e}")
+
+        print("No static data found in bronze/silver/gold")
+        return pd.DataFrame()
+
     except Exception as e:
-        print(f" Error reading static data: {e}")
+        print(f"Error reading static data: {e}")
         return pd.DataFrame()
 
 def read_volcano_data():
@@ -285,7 +264,7 @@ def read_volcano_data():
         return df
         
     except Exception as e:
-        print(f" Error reading volcano data: {e}")
+        print(f"Error reading volcano data: {e}")
         return pd.DataFrame()
 
 def create_earthquake_map(df, n_intervals):
@@ -836,7 +815,7 @@ def update_indicator_dropdown(n_intervals):
         # Fallback to hardcoded options
         return [
             {"label": "GDP (current US$)", "value": "NY.GDP.MKTP.CD"},
-            {"label": "Population, total", "value": "SP.POP.TOTL"}
+            {"label": "Inflation, Consumer Prices (annual %)", "value": "FP.CPI.TOTL.ZG"}
         ]
     
     # Get unique indicators with data
@@ -1049,7 +1028,7 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
             'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
             'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
             'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
-            'SP.POP.TOTL': 'Population, total',
+            'FP.CPI.TOTL.ZG': 'Inflation, Consumer Prices (annual %)',
             'EN.POP.DNST': 'Population density',
             'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
             'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
@@ -1058,25 +1037,37 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
     
     # Filter data based on country selection
     if not static_data.empty and 'indicator_id' in static_data.columns:
+        # Ensure types are correct and clean duplicates
+        static_data['year'] = pd.to_numeric(static_data['year'], errors='coerce')
+        static_data['value'] = pd.to_numeric(static_data['value'], errors='coerce')
+        static_data = static_data.dropna(subset=['year', 'value'])
+        static_data['year'] = static_data['year'].astype(int)
+
         # Filter data for the selected indicator
-        indicator_data = static_data[static_data['indicator_id'] == selected_indicator]
+        indicator_data = static_data[static_data['indicator_id'] == selected_indicator].copy()
+        # Normalize keys and restrict to ISO2 countries (exclude regions/aggregates)
+        indicator_data['country_code'] = indicator_data['country_code'].astype(str).str.strip().str.upper()
+        indicator_data = indicator_data[indicator_data['country_code'].str.len() == 2]
+        # Deduplicate robustly across country/year
+        indicator_data = (indicator_data
+                          .groupby(['country_code', 'year'], as_index=False)['value']
+                          .mean())
         
         if not indicator_data.empty:
             # Set title based on selection
             if country == "ALL" or not country:
                 title = f" {indicator_display_name} - All Countries (2015-2025) - Click legend to filter"
                 # Show all countries for the selected indicator
-                countries_with_data = indicator_data['country_code'].unique()
+                countries_with_data = indicator_data['country_code'].dropna().unique()
                 
                 for i, country_code in enumerate(countries_with_data[:20]):  # Limit to first 20 countries
                     country_name = country_code_to_name.get(country_code, country_code)
                     
-                    # Get data for this country and indicator
-                    country_data = indicator_data[indicator_data['country_code'] == country_code]
+                    # Get data for this country from the pre-aggregated set
+                    country_data = indicator_data[indicator_data['country_code'] == country_code].sort_values('year')
                     
                     if not country_data.empty:
                         # Sort by year and get values
-                        country_data = country_data.sort_values('year')
                         years_data = country_data['year'].tolist()
                         values_data = country_data['value'].tolist()
                         
@@ -1101,11 +1092,11 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
                 country_name = country_code_to_name.get(country, country)
                 title = f" {indicator_display_name} - {country_name} (2015-2025)"
                 
-                # Get data for this specific country and indicator
+                # Get data for this specific country from the pre-aggregated set
+                country = str(country).strip().upper()
                 country_data = indicator_data[indicator_data['country_code'] == country]
                 
                 if not country_data.empty:
-                    # Sort by year and get values
                     country_data = country_data.sort_values('year')
                     years_data = country_data['year'].tolist()
                     values_data = country_data['value'].tolist()
@@ -1159,7 +1150,7 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
                 if selected_indicator == "NY.GDP.MKTP.CD":  # GDP
                     base_value = 1000000000000 * (0.5 + i * 0.1)  # Vary by country
                     values = [base_value * (1 + 0.02 * (year - 2015) + np.random.normal(0, 0.05)) for year in years]
-                elif selected_indicator == "SP.POP.TOTL":  # Population
+                elif selected_indicator == "FP.CPI.TOTL.ZG":  # Inflation
                     base_value = 100000000 * (0.3 + i * 0.05)  # Vary by country
                     values = [base_value * (1 + 0.01 * (year - 2015)) for year in years]
                 elif selected_indicator == "EN.POP.DNST":  # Population density
@@ -1191,7 +1182,7 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
             if selected_indicator == "NY.GDP.MKTP.CD":  # GDP
                 base_value = 1000000000000 * 0.8
                 values = [base_value * (1 + 0.02 * (year - 2015) + np.random.normal(0, 0.05)) for year in years]
-            elif selected_indicator == "SP.POP.TOTL":  # Population
+            elif selected_indicator == "FP.CPI.TOTL.ZG":  # Inflation
                 base_value = 100000000 * 0.5
                 values = [base_value * (1 + 0.01 * (year - 2015)) for year in years]
             elif selected_indicator == "EN.POP.DNST":  # Population density
@@ -1230,7 +1221,7 @@ def update_line_chart(selected_country, selected_indicator, map_selected_country
                 'NV.AGR.TOTL.ZS': 'Agriculture (% of GDP)',
                 'NV.IND.TOTL.ZS': 'Industry (% of GDP)',
                 'NV.SRV.TOTL.ZS': 'Services (% of GDP)',
-                'SP.POP.TOTL': 'Population, total',
+                'FP.CPI.TOTL.ZG': 'Inflation, Consumer Prices (annual %)',
                 'EN.POP.DNST': 'Population density',
                 'IP.PCR.SRCN.XQ': 'Disaster risk reduction score',
                 'VC.DSR.DRPT.P3': 'People affected by disasters (%)'
@@ -1335,14 +1326,14 @@ def main():
     try:
         s3_client = get_s3_client()
         s3_client.list_buckets()
-        print(" MinIO connection successful")
+        print("MinIO connection successful")
     except Exception as e:
-        print(f" MinIO connection failed: {e}")
+        print(f"MinIO connection failed: {e}")
         return
     
     print("Starting Dash server...")
-    print(" Dashboard started successfully!")
-    print(" Access at: http://localhost:8050")
+    print("Dashboard started successfully!")
+    print("Access at: http://localhost:8050")
     
     # Run the app
     app.run_server(debug=True, host='0.0.0.0', port=8050)

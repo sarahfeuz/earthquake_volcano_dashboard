@@ -1,5 +1,0 @@
-Please add here the following .jar files 
-aws-java-sdk-bundle-1.12.262.jar
-delta-core_2.12-2.4.0.jar
-delta-storage-2.4.0.jar
-hadoop-aws-3.3.4.jar

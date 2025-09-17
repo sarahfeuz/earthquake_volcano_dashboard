@@ -1,16 +1,5 @@
 """
-Batch Pipeline DAG for World Bank Data Processing
-
-This DAG orchestrates the batch (non-streaming) pipeline that ingests World Bank
-data and moves it through the medallion layers:
-
-1) Bronze: raw ingestion to Delta Lake on MinIO
-2) Silver: cleaning, validation, and enrichment
-3) Gold: aggregations and analytics outputs
-
-It also performs routine maintenance (optimize Delta tables) and simple data
-quality validation. Each task logs progress so that operators can diagnose issues
-from the Airflow task logs.
+Batch Pipeline DAG
 """
 
 from datetime import datetime, timedelta

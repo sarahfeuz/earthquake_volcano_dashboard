@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Main Data Pipeline with Delta Lake
-Orchestrates the Bronze, Silver, and Gold data processing jobs using Delta Lake
+Main Data Pipeline
 """
 
 from spark_app.bronze_job import run_bronze_job
@@ -10,50 +9,38 @@ from spark_app.gold_job import run_gold_job
 from spark_app.spark_utils import get_spark_session, optimize_delta_table, vacuum_delta_table
 
 def main():
-    """
-    Main pipeline execution with Delta Lake
-    """
-    print("Starting Data Pipeline with Delta Lake...")
+    """Main pipeline execution"""
+    print("Starting Data Pipeline with Parquet...")
     
     # Initialize Spark session
-    print("Initializing Spark session with Delta Lake support...")
+    print("Initializing Spark session with Parquet support...")
     spark = get_spark_session(use_s3=True)
     
     try:
         # Bronze Layer: Fetch World Bank data
         print("\n" + "="*50)
-        print("BRONZE LAYER - Data Ingestion (Delta Lake)")
+        print("BRONZE LAYER - Data Ingestion (Parquet)")
         print("="*50)
         bronze_df = run_bronze_job(spark)
         
         # Silver Layer: Data cleaning and processing
         print("\n" + "="*50)
-        print("SILVER LAYER - Data Processing (Delta Lake)")
+        print("SILVER LAYER - Data Processing (Parquet)")
         print("="*50)
         silver_df = run_silver_job(spark, bronze_df)
         
         # Gold Layer: Data aggregation and insights
         print("\n" + "="*50)
-        print("GOLD LAYER - Data Analytics (Delta Lake)")
+        print("GOLD LAYER - Data Analytics (Parquet)")
         print("="*50)
         gold_df = run_gold_job(spark, silver_df)
         
-        # Delta Lake maintenance operations
+        # Data maintenance operations
         print("\n" + "="*50)
-        print("DELTA LAKE MAINTENANCE")
+        print("DATA MAINTENANCE")
         print("="*50)
         
-        # Optimize Delta tables for better performance
-        print("Optimizing Delta tables...")
-        optimize_delta_table("s3a://bronze/raw_data/world_bank")
-        optimize_delta_table("s3a://silver/processed_data/world_bank")
-        optimize_delta_table("s3a://gold/aggregated_data/world_bank")
-        
-        # Vacuum old files (keep last 7 days)
-        print("Vacuuming old Delta table files...")
-        vacuum_delta_table("s3a://bronze/raw_data/world_bank", retention_hours=168)
-        vacuum_delta_table("s3a://silver/processed_data/world_bank", retention_hours=168)
-        vacuum_delta_table("s3a://gold/aggregated_data/world_bank", retention_hours=168)
+        print("Data processing completed successfully!")
         
         print("\n" + "="*50)
         print(" PIPELINE COMPLETED SUCCESSFULLY!")
@@ -65,10 +52,10 @@ def main():
         print("- MinIO Console: http://localhost:9001")
         print("- Visualization Dashboard: http://localhost:8050")
         print("- Kafka Topics: earthquake-bronze, earthquake-silver, earthquake-gold")
-        print("\n Delta Lake Tables:")
-        print("- Bronze: s3a://bronze/raw_data/world_bank")
-        print("- Silver: s3a://silver/processed_data/world_bank")
-        print("- Gold: s3a://gold/aggregated_data/world_bank")
+        print("\n Parquet Tables:")
+        print("- Bronze: /tmp/bronze/raw_data/world_bank")
+        print("- Silver: /tmp/silver/processed_data/world_bank")
+        print("- Gold: /tmp/gold/aggregated_data/world_bank")
         
     except Exception as e:
         print(f" Pipeline failed: {e}")

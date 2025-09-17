@@ -6,7 +6,6 @@ from config.minio_config import MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_K
 
 def get_spark_session(app_name="PipelineApp", use_s3=True):
     if use_s3:
-        # S3-enabled Spark session with Delta Lake support
         spark = (
             SparkSession.builder
             .appName(app_name)
@@ -20,25 +19,28 @@ def get_spark_session(app_name="PipelineApp", use_s3=True):
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
             .config("spark.hadoop.fs.s3a.connection.maximum", "1000")
             .config("spark.hadoop.fs.s3a.threads.max", "20")
-            # Delta Lake configurations
-            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-            .config("spark.databricks.delta.retentionDurationCheck.enabled", "false")
-            .config("spark.databricks.delta.constraints.enabled", "false")
-            .config("spark.databricks.delta.merge.repartitionBeforeWrite", "true")
-            .config("spark.databricks.delta.optimizeWrite.enabled", "true")
-            .config("spark.databricks.delta.autoOptimize.optimizeWrite", "true")
-            .config("spark.databricks.delta.autoOptimize.autoCompact", "true")
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+            .config("spark.sql.shuffle.partitions", "4")
+            .config("spark.default.parallelism", "2")
+            .config("spark.driver.memory", "1g")
+            .config("spark.executor.memory", "1g")
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .getOrCreate()
         )
     else:
-        # Local-only Spark session with Delta Lake support
+        # Local-only Spark session without Delta Lake
         spark = (
             SparkSession.builder
             .appName(app_name)
             .master("local[*]")  # Use local mode
-            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+            .config("spark.sql.shuffle.partitions", "4")
+            .config("spark.default.parallelism", "2")
+            .config("spark.driver.memory", "1g")
+            .config("spark.executor.memory", "1g")
             .getOrCreate()
         )
 
@@ -95,65 +97,27 @@ def get_spark(app_name="PipelineApp"):
     """Alias for get_spark_session for backward compatibility"""
     return get_spark_session(app_name, use_s3=True)
 
-def write_delta_table(df, table_path, mode="overwrite", partition_by=None):
-    """Write DataFrame to Delta table format"""
+def write_parquet_table(df, table_path, mode="overwrite", partition_by=None):
+    """Write DataFrame to Parquet format"""
     try:
-        writer = df.write.format("delta").mode(mode)
+        writer = df.write.mode(mode)
         
         if partition_by:
             writer = writer.partitionBy(partition_by)
         
-        writer.save(table_path)
-        print(f" Successfully wrote Delta table to: {table_path}")
+        writer.parquet(table_path)
+        print(f"Successfully wrote Parquet table to: {table_path}")
         
     except Exception as e:
-        print(f" Error writing Delta table: {e}")
+        print(f"Error writing Parquet table: {e}")
         raise
 
-def read_delta_table(spark, table_path):
-    """Read Delta table from path"""
+def read_parquet_table(spark, table_path):
+    """Read Parquet table from path"""
     try:
-        df = spark.read.format("delta").load(table_path)
-        print(f" Successfully read Delta table from: {table_path}")
+        df = spark.read.parquet(table_path)
+        print(f"Successfully read Parquet table from: {table_path}")
         return df
     except Exception as e:
-        print(f" Error reading Delta table: {e}")
-        raise
-
-def merge_delta_table(target_path, source_df, merge_key, when_matched="update", when_not_matched="insert"):
-    """Merge data into Delta table"""
-    try:
-        from delta.tables import DeltaTable
-        
-        # Read existing Delta table
-        delta_table = DeltaTable.forPath(spark, target_path)
-        
-        # Perform merge
-        delta_table.alias("target").merge(
-            source_df.alias("source"),
-            merge_key
-        ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-        
-        print(f" Successfully merged data into Delta table: {target_path}")
-        
-    except Exception as e:
-        print(f" Error merging Delta table: {e}")
-        raise
-
-def optimize_delta_table(table_path):
-    """Optimize Delta table for better performance"""
-    try:
-        spark.sql(f"OPTIMIZE '{table_path}'")
-        print(f" Successfully optimized Delta table: {table_path}")
-    except Exception as e:
-        print(f" Error optimizing Delta table: {e}")
-        raise
-
-def vacuum_delta_table(table_path, retention_hours=168):  # Default 7 days
-    """Vacuum Delta table to remove old files"""
-    try:
-        spark.sql(f"VACUUM '{table_path}' RETAIN {retention_hours} HOURS")
-        print(f" Successfully vacuumed Delta table: {table_path}")
-    except Exception as e:
-        print(f" Error vacuuming Delta table: {e}")
+        print(f"Error reading Parquet table: {e}")
         raise

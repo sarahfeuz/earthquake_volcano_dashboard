@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 """
-Streaming Data Processor for Medallion Architecture
-
-This module runs the Kafka consumers and Spark processing needed to move
-streaming data (earthquakes and volcanoes) through the medallion layers:
-
-- Bronze: read raw events from Kafka topics
-- Silver: clean, enrich, and write to Delta on MinIO
-- Gold: aggregate analytics and write to Delta on MinIO
-
-Each consumer focuses on a specific layer and data type. The transformation
-functions perform minimal validation, add metadata, and partition data for
-efficient storage and downstream querying.
+Streaming Data Processor
 """
 
 import json

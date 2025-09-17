@@ -24,6 +24,9 @@ env/
 logs/
 airflow/logs/
 
+# Spark JARs
+pipeline/spark_jar/
+
 # Jupyter
 .ipynb_checkpoints/
 

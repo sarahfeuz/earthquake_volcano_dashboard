@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Database Initialization Script
-Creates MinIO buckets and initializes the data pipeline
 """
 
 import boto3
@@ -9,7 +8,7 @@ import time
 from config.minio_config import MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, BUCKETS
 
 def create_buckets():
-    """Create all required MinIO buckets"""
+    """Create MinIO buckets"""
     print("=" * 50)
     print("  INITIALIZING MINIO DATABASE")
     print("=" * 50)
@@ -31,7 +30,7 @@ def create_buckets():
             if "AlreadyOwnedByYou" in str(e) or "BucketAlreadyExists" in str(e):
                 print(f"ℹ  Bucket already exists: {bucket_name}")
             else:
-                print(f" Error creating bucket {bucket_name}: {e}")
+                print(f"Error creating bucket {bucket_name}: {e}")
     
     print("=" * 50)
     print(" Database initialization completed!")

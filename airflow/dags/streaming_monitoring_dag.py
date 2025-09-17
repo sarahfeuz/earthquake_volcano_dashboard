@@ -1,18 +1,5 @@
 """
 Streaming Pipeline Monitoring DAG
-
-This DAG runs on a short interval to verify that the real-time streaming pipeline is
-healthy and producing data as expected. It focuses on validating the following:
-
-1) The streaming service container is up and running
-2) Kafka topics exist (at minimum the earthquake topics) and are accessible
-3) The Bronze/Silver/Gold streaming processors are running
-4) The dashboard is reachable over HTTP
-5) Fresh streaming data files are being written to MinIO
-6) Delta Lake tables for the batch pipeline exist in MinIO
-
-Each check is implemented as a small Python task that returns True/False and logs
-contextual details for troubleshooting. A summary report aggregates the results.
 """
 
 from datetime import datetime, timedelta

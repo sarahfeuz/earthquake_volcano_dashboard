@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Silver Layer - Data Processing
-Cleans and processes World Bank data from bronze layer using Delta Lake
 """
 
 import sys
@@ -12,21 +11,21 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 import pandas as pd
-from spark_utils import get_s3_client, write_delta_table, read_delta_table
+from spark_utils import get_s3_client, write_parquet_table, read_parquet_table
 
 def run_silver_job(spark, bronze_df=None):
-    """Run the silver layer data processing job"""
+    """Run silver layer data processing"""
     print("=" * 50)
-    print("SILVER LAYER - Data Processing (Delta Lake)")
+    print("SILVER LAYER - Data Processing (Parquet)")
     print("=" * 50)
     
     print("Running Silver job...")
     
     if bronze_df is None:
-        # Read from bronze layer Delta table if not provided
-        print("Reading from bronze layer Delta table...")
-        bronze_delta_path = "s3a://bronze/raw_data/world_bank"
-        bronze_df = read_delta_table(spark, bronze_delta_path)
+        # Read from bronze layer Parquet files if not provided
+        print("Reading from bronze layer Parquet files...")
+        bronze_parquet_path = "s3a://bronze/raw_data/world_bank"
+        bronze_df = spark.read.parquet(bronze_parquet_path)
     else:
         print("Using provided bronze dataframe")
     
@@ -78,23 +77,33 @@ def run_silver_job(spark, bronze_df=None):
     total_records = silver_df.count()
     print(f"Data cleaning completed. Records: {total_records}")
     
-    # Show a small preview of processed data
-    print("Processed data preview:")
-    silver_df.show(10, truncate=False)
+    # Write to silver layer using Parquet (local storage for now)
+    silver_parquet_path = "/tmp/silver/processed_data/world_bank"
     
-    # Write to silver layer using Delta Lake
-    print("Writing to silver layer using Delta Lake...")
-    silver_delta_path = "s3a://silver/processed_data/world_bank"
-    
-    # Write as Delta table with partitioning by year and country_code
-    write_delta_table(
-        df=silver_df,
-        table_path=silver_delta_path,
-        mode="overwrite",
-        partition_by=["year", "country_code"]
-    )
-    
-    print(f" Silver job completed. Delta table written to: {silver_delta_path}")
+    try:
+        # Write as a single Parquet file to reduce memory pressure
+        silver_df.coalesce(1).write.mode("overwrite").parquet(silver_parquet_path)
+        print(f"Successfully wrote {silver_df.count()} records to silver layer")
+        
+        # Also write to MinIO using boto3 for now
+        s3_client = get_s3_client()
+        
+        # Convert Spark DataFrame to pandas for easier upload
+        pandas_df = silver_df.toPandas()
+        
+        # Write as CSV to MinIO
+        csv_content = pandas_df.to_csv(index=False)
+        s3_client.put_object(
+            Bucket="silver",
+            Key="processed_data/world_bank_processed.csv",
+            Body=csv_content.encode('utf-8'),
+            ContentType='text/csv'
+        )
+        print("Successfully uploaded CSV to MinIO silver bucket")
+        
+    except Exception as e:
+        print(f"Error writing to silver layer: {e}")
+        raise
     
     return silver_df
 
